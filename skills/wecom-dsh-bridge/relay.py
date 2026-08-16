@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# 企业微信智能机器人 中继 —— 收消息 -> DeepSeek 对话 -> [RUN] 命令执行 -> 回复
-# 依赖: pip install wecom-aibot-sdk-python aiohttp
-import asyncio, json, os, sys, time, subprocess, re
+# 企业微信智能机器人 v2 —— 真·对话 + 电脑控制 (DSH 桥接)
+# 收消息 -> DeepSeek 对话 -> [RUN] 命令执行 -> 回复
+import asyncio, json, os, sys, time, subprocess, re, hashlib
 from wecom_aibot_sdk import WSClient
 import aiohttp
 
 BASE = os.path.expanduser("~/aibot-relay")
 CONFIG = json.load(open(os.path.join(BASE, "config.json"), encoding="utf-8"))
-INBOX = os.path.join(BASE, "inbox.jsonl")
-CHATS = os.path.join(BASE, "chats")
-os.makedirs(CHATS, exist_ok=True)
 
-# SDK 认识的键（业务配置 deepseek_api_key/model 不要传进去，否则报 unexpected keyword）
 SDK_KEYS = {"bot_id", "secret", "reconnect_interval", "max_reconnect_attempts",
             "heartbeat_interval", "request_timeout", "ws_url", "logger"}
 
 
 def sdk_opts():
     return {k: v for k, v in CONFIG.items() if k in SDK_KEYS}
-
+INBOX = os.path.join(BASE, "inbox.jsonl")
+CHATS = os.path.join(BASE, "chats")
+os.makedirs(CHATS, exist_ok=True)
 
 SYSTEM_PROMPT = (
     "你是运行在用户 Windows 电脑（内含 WSL Ubuntu 环境）上的智能助手「DSH」，通过企业微信与用户对话。\n"
@@ -52,7 +50,7 @@ def load_history(key):
                 hist.append(json.loads(line))
             except Exception:
                 pass
-    return hist[-20:]
+    return hist[-20:]  # 保留最近 20 轮
 
 
 def save_turn(key, role, content):
@@ -109,13 +107,14 @@ async def on_text(frame):
     }
     with open(INBOX, "a", encoding="utf-8") as f:
         f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-    print("MSG:", sender, "|", content[:60], flush=True)
+    print("MSG:", msg["sender"], "|", content[:60], flush=True)
 
     key = chat_key_of(msg)
     hist = load_history(key)
     hist.append({"role": "user", "content": content})
     save_turn(key, "user", content)
 
+    # 先回一个"正在思考"占位
     try:
         await client.reply_stream(frame, "stream-" + str(int(time.time())),
                                   "正在思考…", finish=True)
@@ -127,6 +126,7 @@ async def on_text(frame):
     except Exception as e:
         reply = f"[出错] {e}"
 
+    # 处理 [RUN] 指令
     run_out = ""
     m = re.search(r"\[RUN\]\s*(.+)", reply, re.IGNORECASE)
     if m:
@@ -176,23 +176,21 @@ async def main():
         await send_text(sys.argv[2], sys.argv[3], ct)
         return
     global client
-    client = WSClient(sdk_opts())
-    client.on("message.text", on_text)
-    client.on("event.enter_chat", on_enter)
-    await client.connect_async()
-    print("RELAY_STARTED authenticated:", client.is_authenticated, flush=True)
-
-    async def auth_reporter():
-        for _ in range(10):
-            await asyncio.sleep(2)
-            if client.is_authenticated:
-                print("AUTH_OK connected:", client.is_connected, flush=True)
-                return
-        print("AUTH_STATUS:", client.is_authenticated, flush=True)
-
-    asyncio.create_task(auth_reporter())
-    while client.is_connected:
-        await asyncio.sleep(1)
+    # 外层重连循环：连接断开后 5 秒自动重连，进程永不退出
+    while True:
+        client = WSClient(sdk_opts())
+        client.on("message.text", on_text)
+        client.on("event.enter_chat", on_enter)
+        try:
+            await client.connect_async()
+            await asyncio.sleep(3)
+            print("CONNECTED authenticated:", client.is_authenticated, flush=True)
+            while client.is_connected:
+                await asyncio.sleep(1)
+        except Exception as e:
+            print("CONN_ERR:", e, flush=True)
+        print("CONNECTION LOST, 5 秒后重连...", flush=True)
+        await asyncio.sleep(5)
 
 
 asyncio.run(main())

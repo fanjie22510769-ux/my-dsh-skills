@@ -1,0 +1,9 @@
+{
+  "bot_id": "在这里填BotID(字母数字那串)",
+  "secret": "在这里填长连接专用Secret",
+  "deepseek_api_key": "sk-在这里填DeepSeek密钥",
+  "model": "deepseek-chat",
+  "max_reconnect_attempts": -1,
+  "reconnect_interval": 3000,
+  "heartbeat_interval": 30000
+}

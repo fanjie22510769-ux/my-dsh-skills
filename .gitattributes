@@ -1,0 +1,5 @@
+﻿# 统一换行符：脚本和 Python 保持 LF，避免在 Linux 上运行报错
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
